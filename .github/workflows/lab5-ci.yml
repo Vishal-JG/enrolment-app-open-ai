@@ -70,7 +70,6 @@ jobs:
 
       - name: Create reports directory
         run: mkdir -p reports
-        working-directory: enrolment-app-open-ai
 
       - name: Generate report.json
         run: |
