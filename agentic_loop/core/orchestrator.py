@@ -7,6 +7,8 @@ from core.prompt_registry import PromptRegistry
 from pipelines import architecture_pipeline, db_pipeline, devops_pipeline, endpoints_pipeline
 from pipelines import architecture_pipeline, db_pipeline, devops_pipeline, endpoints_pipeline, mcp_pipeline
 from collectors import architecture_collector, db_collector, devops_collector, endpoints_collector, mcp_collector
+from collectors import architecture_collector, db_collector, devops_collector, endpoints_collector, mcp_collector, rag_collector
+from pipelines import architecture_pipeline, db_pipeline, devops_pipeline, endpoints_pipeline, mcp_pipeline, rag_pipeline
 
 
 COLLECTORS = {
@@ -14,9 +16,9 @@ COLLECTORS = {
     "endpoints": endpoints_collector.collect,
     "architecture": architecture_collector.collect,
     "devops": devops_collector.collect,
-    "mcp": mcp_collector.collect,  # Add this line
+    "mcp": mcp_collector.collect,  
+    "rag": rag_collector.collect,  
 }
-
 
 
 def _stage(mode_label: str, step: str, message: str) -> None:
@@ -145,6 +147,44 @@ def run_mode(mode: ModeConfig, app_dir: Path, repo_root: Path, prompts: PromptRe
     _stage(mode.label, "PROMPTS", "Loaded MCP review prompt")
     _stage(mode.label, "LLM", "Running MCP review model")
     review_output, review_err = ai.call(review_prompt_text, review_user_prompt, review=True)
+    if review_err:
+        review_output = review_err
+        _stage(mode.label, "LLM", "Review model failed")
+    else:
+        _stage(mode.label, "LLM", "Review model complete")
+
+    _stage(mode.label, "DONE", "Review complete")
+
+    return (
+        f"OBSERVE: {evidence}\n\n"
+        f"IMPLEMENTATION: {implementation_output}\n"
+        f"REVIEW: {review_output}"
+    )
+
+  if mode.key == "rag":
+    _stage(mode.label, "PROMPTS", f"Loading prompt family: {mode.prompt_family}")
+    task_prompt = prompts.read(mode.prompt_family, mode.implementation_prompts[0])
+    system_prompt = (
+        "You are a precise RAG pipeline validator. "
+        "Use only supplied evidence and reply in at most 40 words."
+    )
+    implementation_user_prompt = rag_pipeline.build_implementation_prompt(task_prompt, evidence)
+    _stage(mode.label, "PROMPTS", "Loaded RAG implementation prompt")
+
+    _stage(mode.label, "LLM", "Running RAG implementation model")
+    implementation_output, err = ai.call(system_prompt, implementation_user_prompt, review=False)
+    if err:
+        _stage(mode.label, "LLM", "Failed")
+        return f"MODEL FAILED: {err}"
+    _stage(mode.label, "LLM", "RAG implementation model complete")
+
+    review_prompt_text = prompts.read(mode.prompt_family, mode.review_prompts[0])
+    reasoning_prompt_text = prompts.read(mode.prompt_family, mode.review_prompts[1])
+    review_system_prompt = f"{review_prompt_text}\n\n{reasoning_prompt_text}"
+    review_user_prompt = rag_pipeline.build_review_prompt(implementation_output, evidence)
+    _stage(mode.label, "PROMPTS", "Loaded RAG review and reasoning prompts")
+    _stage(mode.label, "LLM", "Running RAG review model")
+    review_output, review_err = ai.call(review_system_prompt, review_user_prompt, review=True)
     if review_err:
         review_output = review_err
         _stage(mode.label, "LLM", "Review model failed")
